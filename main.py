@@ -11,7 +11,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 BAGHDAD_TZ = pytz.timezone("Asia/Baghdad")
 
 # يتم جلب التوكن من إعدادات Runway (Secrets) لضمان العمل
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8630722565:AAGK-xjCMLvtrvLnzvVbvTGn8vWClxsQh6E")
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8630722565:AAGnOFp-37kwIEdCR6GA5j2EmF7zPTrutOY")
 ADMIN_ID = 122498736
 ZAIN_CASH_NUMBER = "07713356493"
 DB_FILE = "bot_database.db"
