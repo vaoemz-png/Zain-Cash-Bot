@@ -1,5 +1,5 @@
 pyTelegramBotAPI
-pytz
+pymongo
+dnspython
 apscheduler
-requests
-beautifulsoup4
+pytz
