@@ -9,7 +9,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 # --- الإعدادات الأساسية ---
 BAGHDAD_TZ = pytz.timezone("Asia/Baghdad")
 # تأكد من وضع التوكن الخاص بك هنا أو في Secret Variables على جيت هوب
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8630722565:AAGK-xjCMLvtrvLnzvVbvTGn8vWClxsQh6E")
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8630722565:AAGnOFp-37kwIEdCR6GA5j2EmF7zPTrutOY")
 DB_FILE = "bot_database.db"
 
 # --- منطق الباقات المحدث (الفحص يتم هنا) ---
