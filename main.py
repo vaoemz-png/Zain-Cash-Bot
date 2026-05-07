@@ -87,7 +87,6 @@ TYPE_LABELS = {
     "plan_payment":  "📊 اشتراك باقة",
     "plan_profit":   "💰 أرباح يومية",
     "plan_deposit":  "📥 إيداع لباقة",
-    "elite_payment": "💎 نادي النخبة",
     "profit_unlock": "🔓 أرباح مفتوحة",
 }
 
@@ -318,7 +317,6 @@ def get_main_menu():
         types.InlineKeyboardButton("📥 إيداع مباشر",          callback_data="menu_deposit"),
         types.InlineKeyboardButton("📤 سحب الأرباح",          callback_data="menu_withdraw"),
         types.InlineKeyboardButton("💰 استلام أرباح اليوم",   callback_data="menu_claim"),
-        types.InlineKeyboardButton("💎 | نادي النخبة الرقمي", callback_data="menu_elite"),
     )
     return markup
 
@@ -384,14 +382,7 @@ def get_admin_keyboard(user_id, txn_id):
     return markup
 
 
-def get_elite_radar_keyboard():
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(
-        types.InlineKeyboardButton("🇮🇶 | رادار العروض العراقية",  callback_data="radar_iraq"),
-        types.InlineKeyboardButton("🌍 | أرشيف المصادر العالمية",  callback_data="radar_world"),
-        types.InlineKeyboardButton("🔙 رجوع",                      callback_data="menu_back"),
-    )
-    return markup
+
 
 
 def send_main_menu(chat_id, message_id=None):
