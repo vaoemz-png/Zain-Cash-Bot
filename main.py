@@ -5,11 +5,9 @@ from datetime import datetime, timedelta
 import pytz
 import telebot
 from telebot import types
-from apscheduler.schedulers.background import BackgroundScheduler
 
 BAGHDAD_TZ = pytz.timezone("Asia/Baghdad")
 
-# الإعدادات الأصلية
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8630722565:AAGK-xjCMLvtrvLnzvVbvTGn8vWClxsQh6E")
 ADMIN_ID = 122498736
 ZAIN_CASH_NUMBER = "07713356493"
@@ -39,20 +37,33 @@ WELCOME_TEXT = (
     "اختر من الأزرار أدناه:"
 )
 
-# تم حذف النخبة وتعديل الأيام (15 للبقية و 30 للباقي)
+# تم حذف النخبة وتصحيح مدد الباقات
 PLANS = {
     "plan_bronze": {"label": "🥉 الباقة البرونزية", "amount": "10,000",  "raw": 10000,  "days": 15},
     "plan_silver": {"label": "🥈 الباقة الفضية",   "amount": "25,000",  "raw": 25000,  "days": 30},
     "plan_gold":   {"label": "🥇 الباقة الذهبية",  "amount": "50,000",  "raw": 50000,  "days": 30},
 }
 
-PROFIT_RATE = 0.50 
+PROFIT_RATE = 0.50
 
-# ── Database (كودك الأصلي للتعامل مع البيانات) ──────────────────────────────────
+TYPE_LABELS = {
+    "deposit":      "📥 إيداع",
+    "withdrawal":   "📤 سحب",
+    "plan_payment": "📊 اشتراك باقة",
+    "plan_profit":  "💹 أرباح باقة",
+}
+
+STATUS_LABELS = {
+    "pending":  "⏳ قيد المراجعة",
+    "approved": "✅ مقبول",
+    "rejected": "❌ مرفوض",
+}
+
+# ── Database ───────────────────────────────────────────────────────────────────
 
 @contextmanager
 def get_conn():
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=20) # زيادة التايم آوت لضمان عدم ضياع البيانات
     conn.row_factory = sqlite3.Row
     try:
         yield conn
@@ -95,23 +106,26 @@ def init_db():
             );
         """)
 
-# ── Keyboards (التعديل المطلوب لإعادة زر الأرباح وحذف النخبة) ──────────────────────
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def fmt(n):
+    return f"{int(n):,}"
+
+# ── Keyboards ──────────────────────────────────────────────────────────────────
 
 def get_main_menu():
     markup = types.InlineKeyboardMarkup(row_width=2)
-    # السطر الأول (كما في الصورة)
     markup.add(
         types.InlineKeyboardButton("📊 الباقات", callback_data="menu_plans"),
         types.InlineKeyboardButton("💳 محفظتي", callback_data="menu_wallet")
     )
-    # السطر الثاني (كما في الصورة)
     markup.add(
         types.InlineKeyboardButton("📤 سحب الأرباح", callback_data="menu_withdraw"),
         types.InlineKeyboardButton("📥 إيداع مباشر", callback_data="menu_deposit")
     )
-    # السطر الثالث (إعادة المحرك الرئيسي)
+    # إضافة زر الأرباح (العقل المدبر)
     markup.add(
-        types.InlineKeyboardButton("💰 استلام أرباح اليوم", callback_data="daily_profit_check")
+        types.InlineKeyboardButton("💰 استلام أرباح اليوم", callback_data="claim_daily_profit")
     )
     return markup
 
@@ -128,49 +142,69 @@ def handle_start(message):
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     user_id = call.from_user.id
-    
-    # المحرك: زر استلام الأرباح
-    if call.data == "daily_profit_check":
-        with get_conn() as conn:
-            sub = conn.execute("SELECT plan_key, plan_name FROM subscriptions WHERE user_id=? AND is_active=1", (user_id,)).fetchone()
-        
-        if sub:
-            days = 15 if sub['plan_key'] == "plan_bronze" else 30
-            msg = f"✅ اشتراكك في {sub['plan_name']} نشط.\n⏳ يرجى الانتظار {days} يوم حتى تكتمل دورة الأرباح وتستطيع سحبها."
-        else:
-            msg = "❌ لا يوجد لديك اشتراك نشط حالياً. يرجى تفعيل باقة لتبدأ بجني الأرباح."
-        bot.answer_callback_query(call.id, msg, show_alert=True)
+    now_bgd = datetime.now(BAGHDAD_TZ)
+    today_str = now_bgd.strftime("%Y-%m-%d")
 
-    # محفظتي
+    # 1. عقل البوت: زر استلام الأرباح
+    if call.data == "claim_daily_profit":
+        # فحص الوقت (10ص - 10م)
+        if not (10 <= now_bgd.hour < 22):
+            bot.answer_callback_query(call.id, "⚠️ انتهى وقت استلام الأرباح اليوم (متاح من 10ص إلى 10م فقط).", show_alert=True)
+            return
+
+        with get_conn() as conn:
+            sub = conn.execute("""SELECT * FROM subscriptions WHERE user_id=? AND is_active=1 
+                                  AND expiry_date >= ?""", (user_id, today_str)).fetchone()
+            
+            if not sub:
+                bot.answer_callback_query(call.id, "❌ ليس لديك باقة نشطة حالياً لجني الأرباح.", show_alert=True)
+                return
+
+            if sub['last_daily_payment'] == today_str:
+                bot.answer_callback_query(call.id, "✅ لقد استلمت أرباح اليوم بالفعل. انتظر حتى الغد!", show_alert=True)
+                return
+
+            # حساب الربح اليومي بناءً على الباقة والمدة
+            daily_profit = round((sub["amount"] * PROFIT_RATE) / sub["duration_days"], 2)
+            
+            # تنفيذ العملية المالية
+            conn.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (daily_profit, user_id))
+            conn.execute("UPDATE subscriptions SET last_daily_payment=? WHERE id=?", (today_str, sub['id']))
+            conn.execute("INSERT INTO transactions (user_id, type, amount, description, status) VALUES (?,?,?,?,?)",
+                         (user_id, "plan_profit", daily_profit, f"ربح يدوي - {sub['plan_name']}", "approved"))
+            
+            bot.answer_callback_query(call.id, f"🎊 تم إضافة أرباح اليوم: {fmt(daily_profit)} د.ع إلى محفظتك!", show_alert=True)
+
+    # 2. قسم الباقات (بدون النخبة)
+    elif call.data == "menu_plans":
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        for key, p in PLANS.items():
+            markup.add(types.InlineKeyboardButton(f"{p['label']} | {p['amount']} د.ع", callback_data=f"buy_{key}"))
+        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="menu_back"))
+        bot.edit_message_text("📊 اختر الباقة المناسبة للاستثمار:", call.message.chat.id, call.message.message_id, reply_markup=markup)
+
+    # 3. قسم المحفظة
     elif call.data == "menu_wallet":
         with get_conn() as conn:
             user = conn.execute("SELECT balance FROM users WHERE user_id=?", (user_id,)).fetchone()
             sub = conn.execute("SELECT plan_name, expiry_date FROM subscriptions WHERE user_id=? AND is_active=1", (user_id,)).fetchone()
         
-        balance = f"{int(user['balance']):,}" if user else "0"
+        balance = fmt(user['balance']) if user else "0"
         plan = sub['plan_name'] if sub else "لا توجد"
         expiry = sub['expiry_date'] if sub else "—"
         
         text = (f"💳 *محفظتك الرقمية*\n━━━━━━━━━━━━━━━━━\n"
                 f"💰 الرصيد الحالي: *{balance} د.ع*\n"
                 f"📊 الباقة النشطة: *{plan}*\n"
-                f"⏳ تاريخ الانتهاء: *{expiry}*")
+                f"⏳ تاريخ الانتهاء: *{expiry}*\n")
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=get_main_menu())
 
-    # الباقات
-    elif call.data == "menu_plans":
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        for key, plan in PLANS.items():
-            markup.add(types.InlineKeyboardButton(f"{plan['label']} | {plan['amount']} د.ع", callback_data=f"buy_{key}"))
-        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="menu_back"))
-        bot.edit_message_text("📊 الباقات المتاحة للاستثمار:", call.message.chat.id, call.message.message_id, reply_markup=markup)
-
-    # الرجوع
     elif call.data == "menu_back":
         bot.edit_message_text(WELCOME_TEXT, call.message.chat.id, call.message.message_id, reply_markup=get_main_menu())
 
-# تشغيل البوت
+# بقية الكود (الإيداع، السحب، ومعالجة الصور) تبقى كما هي في ملفك الأصلي تماماً لضمان عدم ضياع الوظائف
+
 if __name__ == "__main__":
     init_db()
-    print("البوت يعمل بالنسخة الكاملة مع زر الأرباح اليومية...")
+    print("البوت يعمل الآن بنظام استلام الأرباح اليدوي (10ص - 10م)...")
     bot.infinity_polling()
