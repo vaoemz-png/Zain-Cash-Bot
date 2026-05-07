@@ -411,7 +411,7 @@ def build_wallet_text(user, sub):
     lock = fmt(user["locked_profits"])
     inv  = fmt(user["active_plan_price"])
     
-    # تحديد عدد الأيام بناءً على السعر (10 آلاف = 15 يوم، غير ذلك = 30 يوم)
+    # تحديد أيام الانتظار: 15 يوم لباقة الـ 10 آلاف، و 30 يوم للبقية
     if sub and sub.get('plan_price') == 10000:
         p_days = 15
     else:
@@ -425,7 +425,7 @@ def build_wallet_text(user, sub):
     
     warning_msg = ""
     if user['deposit_balance'] == 0:
-        warning_msg = f"⚠️ لا يوجد رصيد متاح للسحب حالياً. استلم أرباحك يومياً وانتظر {p_days} يوم لتفتح وتتحول للرصيد.\n\n"
+        warning_msg = f"⚠️ رصيدك القابل للسحب صفر\nاستلم أرباحك يومياً وانتظر {p_days} يوم لتفتح وتتحول للرصيد.\n\n"
 
     return (
         f"{warning_msg}💳 *محفظتك الرقمية*\n"
@@ -438,6 +438,7 @@ def build_wallet_text(user, sub):
         f"🗓️ تاريخ الانتهاء: *{expiry}*\n"
         f"🆔 معرف الحساب:  `{user['user_id']}`"
     )
+
 
 
 
