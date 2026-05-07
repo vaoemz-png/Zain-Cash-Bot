@@ -1,228 +1,131 @@
 import os
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timedelta
-import pytz
+from datetime import datetime
 import telebot
 from telebot import types
 
-# الإعدادات الأساسية
-BAGHDAD_TZ = pytz.timezone("Asia/Baghdad")
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8630722565:AAGK-xjCMLvtrvLnzvVbvTGn8vWClxsQh6E")
-ADMIN_ID = 122498736
-ZAIN_CASH_NUMBER = "07713356493"
+# الإعدادات
+BOT_TOKEN = "8630722565:AAGK-xjCMLvtrvLnzvVbvTGn8vWClxsQh6E"
 DB_FILE = "bot_database.db"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# ── الحالات ─────────────────────────────────────────────────────────────────────
-user_states = {}
-user_data = {}
-
-STATE_IDLE = "idle"
-STATE_WAITING_DEPOSIT_AMOUNT = "waiting_deposit_amount"
-STATE_WAITING_DEPOSIT_PHOTO = "waiting_deposit_photo"
-STATE_WAITING_PLAN_PHOTO = "waiting_plan_photo"
-STATE_WAITING_WITHDRAW_AMOUNT = "waiting_withdraw_amount"
-STATE_WAITING_WITHDRAW_PHONE = "waiting_withdraw_phone"
-
-WITHDRAW_METHODS = {
-    "withdraw_zaincash":  {"label": "💳 زين كاش",          "short": "زين كاش"},
-    "withdraw_asiacell":  {"label": "📱 آسياسيل تحويل",    "short": "آسياسيل"},
-}
-
-WELCOME_TEXT = (
-    "💎 أهلاً بك في متجر دراهم الرقمي\n"
-    "• البوت الأول في العراق لتحويل النقاط إلى أرباح حقيقية 🇮🇶\n\n"
-    "اختر من الأزرار أدناه:"
-)
-
-# تم حذف باقة النخبة وتعديل الفئات
+# الباقات مع المدد المحددة
 PLANS = {
-    "plan_bronze": {"label": "🥉 الباقة البرونزية", "amount": "10,000",  "raw": 10000,  "days": 15},
-    "plan_silver": {"label": "🥈 الباقة الفضية",   "amount": "25,000",  "raw": 25000,  "days": 30},
-    "plan_gold":   {"label": "🥇 الباقة الذهبية",  "amount": "50,000",  "raw": 50000,  "days": 30},
+    "plan_10": {"label": "🥉 باقة الـ 10", "amount": 10000, "days": 15},
+    "plan_25": {"label": "🥈 باقة الـ 25", "amount": 25000, "days": 30},
+    "plan_50": {"label": "🥇 باقة الـ 50", "amount": 50000, "days": 30},
 }
 
-PROFIT_RATE = 0.50
-
-TYPE_LABELS = {
-    "deposit":      "📥 إيداع",
-    "withdrawal":   "📤 سحب",
-    "plan_payment": "📊 اشتراك باقة",
-    "plan_profit":  "💹 أرباح باقة",
-}
-
-STATUS_LABELS = {
-    "pending":  "⏳ قيد المراجعة",
-    "approved": "✅ مقبول",
-    "rejected": "❌ مرفوض",
-}
-
-# ── قاعدة البيانات (تم تحسين الاستقرار) ───────────────────────────────────────────
+# ── قاعدة بيانات مستقرة (لحل مشكلة ضياع البيانات) ────────────────
+def init_db():
+    with sqlite3.connect(DB_FILE) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                balance REAL DEFAULT 0,
+                last_plan TEXT DEFAULT 'none'
+            )""")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                user_id INTEGER PRIMARY KEY,
+                plan_key TEXT,
+                active INTEGER DEFAULT 0,
+                start_date TEXT
+            )""")
+        conn.commit()
 
 @contextmanager
-def get_conn():
-    conn = sqlite3.connect(DB_FILE, check_same_thread=False, timeout=10)
-    conn.row_factory = sqlite3.Row
+def db_conn():
+    conn = sqlite3.connect(DB_FILE, timeout=10)
     try:
         yield conn
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        print(f"Database Error: {e}")
-        raise
+        conn.commit() # حفظ إجباري للبيانات
     finally:
         conn.close()
 
-def init_db():
-    with get_conn() as conn:
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id   INTEGER PRIMARY KEY,
-                name      TEXT    DEFAULT '',
-                username  TEXT    DEFAULT '',
-                balance   REAL    DEFAULT 0
-            );
+# ── القوائم ──────────────────────────────────────────────────
 
-            CREATE TABLE IF NOT EXISTS transactions (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id     INTEGER NOT NULL,
-                type        TEXT    NOT NULL,
-                amount      REAL    NOT NULL,
-                description TEXT    DEFAULT '',
-                status      TEXT    DEFAULT 'pending',
-                created_at  TEXT    DEFAULT (datetime('now','localtime')),
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS subscriptions (
-                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id            INTEGER NOT NULL,
-                plan_name          TEXT    NOT NULL,
-                plan_key           TEXT    NOT NULL,
-                amount             REAL    NOT NULL,
-                duration_days      INTEGER NOT NULL,
-                start_date         TEXT    NOT NULL,
-                expiry_date        TEXT    NOT NULL,
-                is_active          INTEGER DEFAULT 1,
-                profit_paid        INTEGER DEFAULT 0,
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
-            );
-        """)
-    print("Database initialized & persistent.")
-
-# دالة لجلب معلومات المستخدم والاشتراك دفعة واحدة
-def get_user_context(user_id):
-    with get_conn() as conn:
-        user = conn.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
-        active_sub = conn.execute(
-            "SELECT * FROM subscriptions WHERE user_id=? AND is_active=1 ORDER BY id DESC LIMIT 1",
-            (user_id,)
-        ).fetchone()
-        last_sub = conn.execute(
-            "SELECT * FROM subscriptions WHERE user_id=? ORDER BY id DESC LIMIT 1",
-            (user_id,)
-        ).fetchone()
-        return user, active_sub, last_sub
-
-# ── دوال مساعدة ─────────────────────────────────────────────────────────────────
-
-def fmt(n):
-    return f"{int(n):,}"
-
-def ensure_user(conn, user_id, name="", username=""):
-    conn.execute(
-        "INSERT OR IGNORE INTO users (user_id, name, username, balance) VALUES (?, ?, ?, 0)",
-        (user_id, name, username),
-    )
-
-def add_transaction(conn, user_id, txn_type, amount, description="", status="pending"):
-    cur = conn.execute(
-        "INSERT INTO transactions (user_id, type, amount, description, status) VALUES (?,?,?,?,?)",
-        (user_id, txn_type, amount, description, status),
-    )
-    return cur.lastrowid
-
-# ── القوائم ─────────────────────────────────────────────────────────────────────
-
-def get_main_menu():
+def main_menu():
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("💳 محفظتي",       callback_data="menu_wallet"),
-        types.InlineKeyboardButton("📊 الباقات",       callback_data="menu_plans"),
-        types.InlineKeyboardButton("📥 إيداع مباشر",  callback_data="menu_deposit"),
-        types.InlineKeyboardButton("📤 سحب الأرباح",  callback_data="menu_withdraw"),
+        types.InlineKeyboardButton("💰 الأرباح اليومية", callback_data="daily_profit_check"),
+        types.InlineKeyboardButton("📊 الباقات", callback_data="show_plans"),
+        types.InlineKeyboardButton("💳 محفظتي", callback_data="my_wallet"),
+        types.InlineKeyboardButton("📤 سحب الأرباح", callback_data="withdraw_request")
     )
     return markup
 
-# ── المعالجات ──────────────────────────────────────────────────────────────────
+# ── المعالجات ────────────────────────────────────────────────
 
-@bot.message_handler(commands=["start"])
-def handle_start(message):
-    user_id = message.from_user.id
-    with get_conn() as conn:
-        ensure_user(conn, user_id, message.from_user.full_name, message.from_user.username)
-    bot.send_message(message.chat.id, WELCOME_TEXT, reply_markup=get_main_menu())
+@bot.message_handler(commands=['start'])
+def start(message):
+    with db_conn() as conn:
+        conn.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (message.from_user.id,))
+    bot.send_message(message.chat.id, "💎 أهلاً بك في نظام الأرباح.\nتم تحديث النظام ليعمل بشكل متكامل مع باقاتك.", reply_markup=main_menu())
 
-@bot.callback_query_handler(func=lambda call: call.data == "menu_withdraw")
-def handle_withdraw_menu(call):
-    user_id = call.from_user.id
-    user, active_sub, last_sub = get_user_context(user_id)
+@bot.callback_query_handler(func=lambda call: True)
+def handle_query(call):
+    uid = call.from_user.id
 
-    # 1. حالة المستخدم الذي لم يسبق له الاشتراك أبداً
-    if not last_sub:
-        text = "⚠️ *عذراً، نظام السحب مغلق حالياً*\n\nيجب عليك تفعيل إحدى الباقات أولاً لتتمكن من فتح ميزة السحب."
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, 
-                              parse_mode="Markdown", reply_markup=get_main_menu())
-        return
+    # 1. زر الأرباح اليومية (العقل المدبر للنظام)
+    if call.data == "daily_profit_check":
+        with db_conn() as conn:
+            sub = conn.execute("SELECT plan_key, active FROM subscriptions WHERE user_id=?", (uid,)).fetchone()
+            user = conn.execute("SELECT last_plan FROM users WHERE user_id=?", (uid,)).fetchone()
 
-    # 2. حالة وجود اشتراك (نشط أو منتهي)
-    # نحدد المدة بناءً على نوع الباقة (15 أو 30)
-    days_limit = last_sub["duration_days"]
-    
-    if active_sub:
-        # إذا كان الاشتراك نشطاً، نتحقق من مرور المدة المطلوبة لسحب "الأرباح"
-        # ملاحظة: في هذا النظام الأرباح تضاف عند الانتهاء أو يدوياً، لذا نوجه المستخدم للمدة
-        text = (
-            f"📤 *قسم سحب الأرباح*\n\n"
-            f"📦 باقتك الحالية: *{active_sub['plan_name']}*\n"
-            f"⏳ يرجى الانتظار مدة *{days_limit} يوم* حتى نهاية الباقة لاستلام الأرباح كاملة.\n\n"
-            f"💰 رصيدك المتاح حالياً: *{fmt(user['balance'])} د.ع*"
-        )
-        if user['balance'] > 0:
-            markup = types.InlineKeyboardMarkup(row_width=1)
-            for key, method in WITHDRAW_METHODS.items():
-                markup.add(types.InlineKeyboardButton(method["label"], callback_data=key))
-            markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="menu_back"))
-            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, 
-                                  parse_mode="Markdown", reply_markup=markup)
+        if sub and sub[1] == 1: # مشترك حالي
+            plan_key = sub[0]
+            days = 15 if plan_key == "plan_10" else 30
+            msg = f"✅ اشتراكك نشط حالياً.\n📦 نوع الباقة: {PLANS[plan_key]['label']}\n⏳ يرجى الانتظار {days} يوم حتى تكتمل دورة الأرباح وتستطيع سحبها."
+        elif user and user[0] != 'none': # لديه خطة سابقة انتهت
+            msg = f"⚠️ انتهت خطتك السابقة. يمكنك الآن سحب الأرباح أو التجديد لفتح الأرباح اليومية مرة أخرى."
+        else: # غير مشترك
+            msg = "❌ أنت غير مشترك في أي باقة حالياً. يرجى تفعيل باقة لتبدأ بجني الأرباح اليومية."
+        
+        bot.answer_callback_query(call.id, msg, show_alert=True)
+
+    # 2. عرض الباقات (بدون النخبة)
+    elif call.data == "show_plans":
+        markup = types.InlineKeyboardMarkup()
+        for key, p in PLANS.items():
+            markup.add(types.InlineKeyboardButton(p['label'], callback_data=f"buy_{key}"))
+        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="back_home"))
+        bot.edit_message_text("اختر الباقة المناسبة لتفعيل الأرباح:", uid, call.message.message_id, reply_markup=markup)
+
+    # 3. منطق الشراء (لتثبيت البيانات)
+    elif call.data.startswith("buy_"):
+        plan_key = call.data.split("_")[1]
+        with db_conn() as conn:
+            conn.execute("INSERT OR REPLACE INTO subscriptions (user_id, plan_key, active, start_date) VALUES (?, ?, 1, ?)", 
+                         (uid, plan_key, datetime.now().strftime("%Y-%m-%d")))
+            conn.execute("UPDATE users SET last_plan=? WHERE user_id=?", (plan_key, uid))
+        bot.answer_callback_query(call.id, "✅ تم تفعيل الباقة بنجاح!", show_alert=True)
+        bot.edit_message_text("تم ربط حسابك بالنظام بنجاح.", uid, call.message.message_id, reply_markup=main_menu())
+
+    # 4. زر السحب (مرتبط بمدة الباقة)
+    elif call.data == "withdraw_request":
+        with db_conn() as conn:
+            row = conn.execute("SELECT last_plan FROM users WHERE user_id=?", (uid,)).fetchone()
+        
+        if not row or row[0] == 'none':
+            msg = "⚠️ يجب أن يكون لديك اشتراك سابق أو حالي لتتمكن من السحب."
         else:
-            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, 
-                                  parse_mode="Markdown", reply_markup=get_main_menu())
-    else:
-        # اشتراك سابق منتهي
-        text = f"✅ انتهت مدة اشتراكك السابق ({days_limit} يوم). يمكنك الآن سحب رصيدك أو إعادة الاستثمار."
-        # إظهار خيارات السحب... (نفس المنطق أعلاه)
-        if user['balance'] > 0:
-            markup = types.InlineKeyboardMarkup(row_width=1)
-            for key, method in WITHDRAW_METHODS.items():
-                markup.add(types.InlineKeyboardButton(method["label"], callback_data=key))
-            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, 
-                                  parse_mode="Markdown", reply_markup=markup)
-        else:
-            bot.edit_message_text("⚠️ رصيدك الحالي 0. قم بالإيداع أو تفعيل باقة جديدة.", 
-                                  call.message.chat.id, call.message.message_id, reply_markup=get_main_menu())
+            days = 15 if row[0] == "plan_10" else 30
+            msg = f"📤 طلب سحب أرباح:\nنظام باقتك يتطلب مرور {days} يوم.\nيرجى الانتظار حتى انتهاء المدة."
+        
+        bot.edit_message_text(msg, uid, call.message.message_id, reply_markup=main_menu())
 
-# بقية الكود (إيداع، شراء باقات، إلخ) تبقى كما هي مع استبدال get_conn المحسن
-# ... (يمكنك إدراج بقية الوظائف من الملف الأصلي هنا مع التأكد من حذف أي إشارة لـ scheduler)
+    elif call.data == "my_wallet":
+        with db_conn() as conn:
+            row = conn.execute("SELECT balance FROM users WHERE user_id=?", (uid,)).fetchone()
+        bot.answer_callback_query(call.id, f"رصيدك: {row[0] if row else 0:,} د.ع", show_alert=True)
 
-@bot.callback_query_handler(func=lambda call: call.data == "menu_back")
-def handle_back(call):
-    bot.edit_message_text(WELCOME_TEXT, call.message.chat.id, call.message.message_id, reply_markup=get_main_menu())
+    elif call.data == "back_home":
+        bot.edit_message_text("القائمة الرئيسية:", uid, call.message.message_id, reply_markup=main_menu())
 
-# تشغيل البوت
 if __name__ == "__main__":
     init_db()
-    print("Bot started without Daily Scheduler.")
+    print("البوت يعمل بنظام 'زر الأرباح' المتكامل...")
     bot.infinity_polling()
