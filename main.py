@@ -289,12 +289,11 @@ def expiry_from_now(days):
     return (datetime.now(BAGHDAD_TZ) + timedelta(days=days)).strftime("%Y-%m-%d")
 
 
-def days_until_unlock(profit_lock_start):
-    if not profit_lock_start:
+def days_until_unlock(profit_lock_start, plan_days=30):
         return 0
     try:
         lock_dt   = datetime.strptime(profit_lock_start, "%Y-%m-%d")
-        unlock_dt = lock_dt + timedelta(days=PLAN_LOCK_DAYS)
+        unlock_dt = lock_dt + timedelta(days=plan_days)
         today     = datetime.now()
         return max((unlock_dt - today).days, 0)
     except Exception:
