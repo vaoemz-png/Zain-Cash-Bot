@@ -427,7 +427,7 @@ def build_wallet_text(user, sub):
     if user['deposit_balance'] == 0:
         warning_msg = f"⚠️ رصيدك القابل للسحب صفر\nلا يوجد رصيد متاح للسحب حالياً. استلم أرباحك يومياً وانتظر {p_days} يوم لتفتح وتتحول للرصيد.\n\n"
 
-    return (
+        return (
         f"{warning_msg}💳 *محفظتك الرقمية*\n"
         "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
         f"💵 رصيد قابل للسحب:  *{dep}* د.ع\n"
@@ -438,6 +438,7 @@ def build_wallet_text(user, sub):
         f"🗓️ تاريخ الانتهاء: *{expiry}*\n"
         f"🆔 معرف الحساب:  `{user['user_id']}`"
     )
+
 
 
 
