@@ -9,10 +9,10 @@ from apscheduler.schedulers.background import BackgroundScheduler
 # --- الإعدادات الأساسية ---
 BAGHDAD_TZ = pytz.timezone("Asia/Baghdad")
 
-# توكن البوت
-BOT_TOKEN = "8630722565:AAGK-xjCMLvtrvLnzvVbvTGn8vWClxsQh6E"
+# التوكن الجديد الذي أرسلته
+BOT_TOKEN = "8630722565:AAGnOFp-37kwIEdCR6GA5j2EmF7zPTrutOY"
 
-# رابط قاعدة البيانات MongoDB
+# رابط MongoDB الخاص بك
 MONGO_URI = "mongodb+srv://Drahiim:yLg4%R%Saa5Vu3@@cluster0.8bjkzgv.mongodb.net/?appName=Cluster0"
 
 client = MongoClient(MONGO_URI)
@@ -29,7 +29,7 @@ PLANS = {
     "plan_elite":  {"label": "💎 باقة النخبة",     "price": 100000, "lock_days": 30},
 }
 
-# --- القائمة الرئيسية (بدون زر نادي النخبة) ---
+# --- القائمة الرئيسية (تم حذف زر نادي النخبة كما طلبت) ---
 def get_main_menu():
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -41,21 +41,21 @@ def get_main_menu():
     )
     return markup
 
-# --- إصلاح زر استلام الأرباح ---
+# --- زر استلام الأرباح ---
 @bot.callback_query_handler(func=lambda c: c.data == "menu_claim")
 def handle_claim(call):
     uid = call.from_user.id
     user = users_col.find_one({"user_id": uid})
     
     if not user or user.get("active_plan_price", 0) == 0:
-        bot.answer_callback_query(call.id, "⚠️ ليس لديك باقة نشطة! اشترك لتتمكن من جمع الأرباح.", show_alert=True)
+        bot.answer_callback_query(call.id, "⚠️ ليس لديك باقة نشطة حالياً.", show_alert=True)
         return
 
     now = datetime.now(BAGHDAD_TZ)
     today_str = now.strftime("%Y-%m-%d")
     
     if user.get("profit_claimed_date") == today_str:
-        bot.answer_callback_query(call.id, "❌ استلمت أرباحك لليوم بالفعل.", show_alert=True)
+        bot.answer_callback_query(call.id, "❌ لقد استلمت أرباحك لليوم بالفعل.", show_alert=True)
         return
 
     daily_profit = user["active_plan_price"] * 0.05
@@ -68,39 +68,39 @@ def handle_claim(call):
         }
     )
     
-    bot.edit_message_text(f"✅ استلمت ربحك اليوم: {daily_profit:,.0f} د.ع\nستُفتح مع رأس المال عند انتهاء المدة.", 
+    bot.edit_message_text(f"✅ تم استلام ربح اليوم: {daily_profit:,.0f} د.ع\nستُضاف للمحفظة فور انتهاء مدة الباقة.", 
                           call.message.chat.id, call.message.message_id, reply_markup=get_main_menu())
 
-# --- منطق سحب الأرباح ---
+# --- منطق سحب الأرباح (15 يوم للبرونزية و30 للبقية) ---
 @bot.callback_query_handler(func=lambda c: c.data == "menu_withdraw")
 def handle_withdraw_menu(call):
     uid = call.from_user.id
     user = users_col.find_one({"user_id": uid})
     
     if not user or user.get("active_plan_price", 0) == 0:
-        bot.answer_callback_query(call.id, "⚠️ لا توجد باقة نشطة حالياً.", show_alert=True)
+        bot.answer_callback_query(call.id, "⚠️ اشترك في باقة أولاً لتتمكن من السحب.", show_alert=True)
         return
 
     p_price = user.get("active_plan_price", 0)
     lock_days = 15 if p_price == 10000 else 30
     
     p_key = user.get("active_plan_key", "plan_bronze")
-    p_label = PLANS.get(p_key, {"label": "باقتك الاستثمارية"})["label"]
+    p_label = PLANS.get(p_key, {"label": "الباقة النشطة"})["label"]
 
     if user.get("deposit_balance", 0) <= 0:
         text = (
             f"📤 *قسم سحب الأرباح*\n"
             f"━━━━━━━━━━━━━━━━━\n"
-            f"📦 الباقة: *{p_label}*\n\n"
-            f"تُفتح أرباحك تلقائياً بعد مرور *{lock_days} يوم* من تاريخ الاشتراك\\.\n\n"
-            f"⚠️ رصيدك المتاح للسحب الآن: *0 د\\.ع*\\."
+            f"📦 نوع الباقة: *{p_label}*\n\n"
+            f"تُفتح أرباحك ورأس مالك تلقائياً بعد مرور *{lock_days} يوم* من الاشتراك\\.\n\n"
+            f"⚠️ الرصيد المتاح للسحب الآن: *0 د\\.ع*\\."
         )
         markup = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("🔙 رجوع", callback_data="menu_back"))
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2", reply_markup=markup)
     else:
         bot.send_message(call.message.chat.id, "أرسل المبلغ الذي تود سحبه:")
 
-# --- وظيفة فتح الأرباح التلقائية ---
+# --- فحص انتهاء مدة الباقة تلقائياً ---
 def check_unlock_profits():
     now = datetime.now(BAGHDAD_TZ)
     active_users = users_col.find({"active_plan_price": {"$gt": 0}})
@@ -108,7 +108,6 @@ def check_unlock_profits():
     for u in active_users:
         needed = 15 if u["active_plan_price"] == 10000 else 30
         start_date_str = u.get("profit_lock_start")
-        
         if start_date_str:
             try:
                 start_dt = datetime.strptime(start_date_str, "%Y-%m-%d")
@@ -128,9 +127,9 @@ def check_unlock_profits():
                             }
                         }
                     )
-                    bot.send_message(u["user_id"], "🎊 مبروك! اكتملت مدة الاستثمار وتم فتح الرصيد.")
-            except Exception as e:
-                print(f"Error checking unlock: {e}")
+                    try: bot.send_message(u["user_id"], "🎊 مبروك! انتهت مدة استثمارك وتم تحويل الرصيد لمحفظتك.")
+                    except: pass
+            except: pass
 
 @bot.callback_query_handler(func=lambda c: c.data == "menu_back")
 def back_home(call):
@@ -140,10 +139,11 @@ def back_home(call):
 def start_cmd(message):
     bot.send_message(message.chat.id, "أهلاً بك في بوت دراهم الرقمي 🇮🇶", reply_markup=get_main_menu())
 
-# --- التشغيل ---
+# --- بدء التشغيل ---
 if __name__ == "__main__":
     scheduler = BackgroundScheduler(timezone=BAGHDAD_TZ)
     scheduler.add_job(check_unlock_profits, 'interval', hours=1)
     scheduler.start()
-    print("Bot is starting...")
+    print("Bot is LIVE...")
     bot.infinity_polling()
+                
