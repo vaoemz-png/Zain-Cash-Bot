@@ -1,21 +1,18 @@
 import os
 import sqlite3
-import threading
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
 import telebot
 from telebot import types
 from apscheduler.schedulers.background import BackgroundScheduler
 
-# ── الإعدادات الأساسية ──────────────────────────────────────────────────────────
+# --- الإعدادات الأساسية ---
 BAGHDAD_TZ = pytz.timezone("Asia/Baghdad")
+# تأكد من وضع التوكن الخاص بك هنا أو في Secret Variables على جيت هوب
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8630722565:AAGK-xjCMLvtrvLnzvVbvTGn8vWClxsQh6E")
-ADMIN_ID = 122498736
-ZAIN_CASH_NUMBER = "07713356493"
 DB_FILE = "bot_database.db"
 
-# ── الباقات المحدثة بالمنطق الجديد ──────────────────────────────────────────────
-# باقة الـ 10 (البرونزية) قفل 15 يوم، البقية 30 يوم
+# --- منطق الباقات المحدث (الفحص يتم هنا) ---
 PLANS = {
     "plan_bronze": {"label": "🥉 الباقة البرونزية", "amount": "10,000",  "raw": 10000,  "lock_days": 15},
     "plan_silver": {"label": "🥈 الباقة الفضية",   "amount": "25,000",  "raw": 25000,  "lock_days": 30},
@@ -23,13 +20,9 @@ PLANS = {
     "plan_elite":  {"label": "💎 باقة النخبة",      "amount": "100,000", "raw": 100000, "lock_days": 30},
 }
 
-PROFIT_MULT = 1.50  # عائد 150%
-CLAIM_START_H = 10
-CLAIM_END_H = 22
-
 bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
 
-# ── قاعدة البيانات ────────────────────────────────────────────────────────────
+# --- إدارة قاعدة البيانات ---
 def get_conn():
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
@@ -45,21 +38,17 @@ def init_db():
                 deposit_balance REAL DEFAULT 0,
                 locked_profits REAL DEFAULT 0,
                 active_plan_price REAL DEFAULT 0,
-                profit_claimed_date TEXT,
                 profit_lock_start TEXT,
                 active_plan_key TEXT
             );
-            CREATE TABLE IF NOT EXISTS transactions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                type TEXT,
-                amount REAL,
-                status TEXT DEFAULT 'pending',
-                created_at TEXT DEFAULT (datetime('now','localtime'))
-            );
         """)
+        # إضافة عمود نوع الباقة إذا كان مفقوداً في النسخة القديمة
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN active_plan_key TEXT")
+        except:
+            pass
 
-# ── الكيبوردات (بعد حذف زر النادي) ──────────────────────────────────────────────
+# --- الكيبورد الرئيسي (بدون زر النخبة) ---
 def get_main_menu():
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -71,7 +60,7 @@ def get_main_menu():
     )
     return markup
 
-# ── منطق السحب المحدث ──────────────────────────────────────────────────────────
+# --- معالج سحب الأرباح (المنطق الجديد) ---
 @bot.callback_query_handler(func=lambda c: c.data == "menu_withdraw")
 def handle_withdraw_menu(call):
     uid = call.from_user.id
@@ -79,62 +68,65 @@ def handle_withdraw_menu(call):
         user = conn.execute("SELECT * FROM users WHERE user_id=?", (uid,)).fetchone()
     
     if not user or user["active_plan_price"] == 0:
-        bot.edit_message_text("⚠️ لا توجد باقة نشطة حالياً للسحب.", call.message.chat.id, call.message.message_id, reply_markup=get_main_menu())
+        bot.answer_callback_query(call.id, "⚠️ لا تملك باقة نشطة حالياً")
         return
 
-    plan_key = user["active_plan_key"]
-    # الحصول على عدد أيام القفل بناءً على نوع الباقة من القاموس
-    lock_days = PLANS.get(plan_key, {"lock_days": 15})["lock_days"]
-    
+    # فحص الكود لنوع الباقة والمدة
+    p_key = user["active_plan_key"]
+    # إذا لم يكن هناك مفتاح مخزن، نفترض أنها باقة 10 آلاف القديمة (15 يوم) كأمان
+    lock_duration = PLANS.get(p_key, {"lock_days": 15})["lock_days"]
+    plan_name = PLANS.get(p_key, {"label": "باقة نشطة"})["label"]
+
     if user["deposit_balance"] <= 0:
+        # رسالة السحب الجديدة (تلقائية بالكامل)
         text = (
-            f"⚠️ *رصيدك القابل للسحب صفر*\n\n"
-            f"📦 باقتك النشطة: *{PLANS[plan_key]['label']}* ✅\n\n"
-            f"لا يوجد رصيد متاح للسحب حالياً. استلم أرباحك يومياً "
-            f"وانتظر انتهاء مدة الاستثمار ( {lock_days} يوم ) لتُفتح وتُحوَّل للرصيد."
+            f"📤 *قسم سحب الأرباح*\n"
+            f"━━━━━━━━━━━━━━━━━\n"
+            f"📦 باقتك الحالية: *{plan_name}*\n\n"
+            f"تُفتح الأرباح ورأس المال تلقائياً في رصيدك القابل للسحب بعد مرور *{lock_duration} يوم* من تاريخ اشتراكك\\.\n\n"
+            f"💡 يمكنك الآن استلام الأرباح اليومية لتضاف إلى الرصيد المقيد حتى انتهاء المدة\\."
         )
         markup = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("🔙 رجوع", callback_data="menu_back"))
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2", reply_markup=markup)
     else:
-        # هنا يكمل إجراءات السحب إذا توفر رصيد
-        pass
+        # منطق السحب الفعلي في حال وجود رصيد
+        bot.send_message(call.message.chat.id, "ارسل المبلغ الذي تريد سحبه:")
 
-# ── تعديل التفعيل التلقائي (لضمان حفظ نوع الباقة) ──────────────────────────────
-def activate_plan(conn, uid, plan_key):
-    plan = PLANS[plan_key]
-    today = datetime.now(BAGHDAD_TZ).strftime("%Y-%m-%d")
-    conn.execute(
-        """UPDATE users SET 
-           active_plan_price = ?, 
-           active_plan_key = ?, 
-           profit_lock_start = ? 
-           WHERE user_id = ?""",
-        (plan["raw"], plan_key, today, uid)
-    )
-
-# ── الجدولة الزمنية لفتح الأرباح بناءً على نوع الباقة ──────────────────────────────
-def unlock_profits_task():
+# --- وظيفة فتح الأرباح التلقائية (الخلفية) ---
+def unlock_profits_logic():
     now = datetime.now(BAGHDAD_TZ)
     with get_conn() as conn:
         users = conn.execute("SELECT * FROM users WHERE active_plan_price > 0 AND profit_lock_start IS NOT NULL").fetchall()
         for u in users:
-            plan_key = u["active_plan_key"]
-            lock_days = PLANS.get(plan_key, {"lock_days": 15})["lock_days"]
-            start_date = datetime.strptime(u["profit_lock_start"], "%Y-%m-%d")
+            p_key = u["active_plan_key"]
+            # هنا الكود "يعرف" أن الـ 10 تفتح بـ 15 والبقية بـ 30
+            days_to_wait = PLANS.get(p_key, {"lock_days": 30})["lock_days"]
             
-            # فحص هل انتهت المدة (15 أو 30 يوم)
-            if (now - BAGHDAD_TZ.localize(start_date)).days >= lock_days:
-                total_unlocked = u["locked_profits"] + u["active_plan_price"]
-                conn.execute(
-                    "UPDATE users SET deposit_balance = deposit_balance + ?, locked_profits = 0, active_plan_price = 0 WHERE user_id = ?",
-                    (total_unlocked, u["user_id"])
-                )
-                print(f"Unlocked for {u['user_id']}")
+            start_date = datetime.strptime(u["profit_lock_start"], "%Y-%m-%d")
+            elapsed_days = (now - BAGHDAD_TZ.localize(start_date)).days
+            
+            if elapsed_days >= days_to_wait:
+                total_amount = u["locked_profits"] + u["active_plan_price"]
+                conn.execute("""UPDATE users SET 
+                                deposit_balance = deposit_balance + ?, 
+                                locked_profits = 0, 
+                                active_plan_price = 0, 
+                                profit_lock_start = NULL,
+                                active_plan_key = NULL 
+                                WHERE user_id = ?""", (total_amount, u["user_id"]))
+                try:
+                    bot.send_message(u["user_id"], f"✅ تم فتح رصيد باقة ({PLANS.get(p_key)['label']}) بنجاح! الرصيد متاح الآن في محفظتك.")
+                except: pass
 
-# ── التشغيل ───────────────────────────────────────────────────────────────────
+@bot.callback_query_handler(func=lambda c: c.data == "menu_back")
+def back_to_main(call):
+    bot.edit_message_text("💎 قائمة التحكم الرئيسية:", call.message.chat.id, call.message.message_id, reply_markup=get_main_menu())
+
+# --- التشغيل ---
 if __name__ == "__main__":
     init_db()
     scheduler = BackgroundScheduler(timezone=BAGHDAD_TZ)
-    scheduler.add_job(unlock_profits_task, 'interval', hours=1)
+    scheduler.add_job(unlock_profits_logic, 'interval', hours=2) # فحص كل ساعتين
     scheduler.start()
+    print("Bot is Live on GitHub/Server...")
     bot.infinity_polling()
