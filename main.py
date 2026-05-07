@@ -393,52 +393,38 @@ def get_elite_radar_keyboard():
     return markup
 
 
-def send_main_menu(chat_id, message_id=None):
-    if message_id:
-        try:
-            bot.edit_message_text(WELCOME_TEXT, chat_id=chat_id, message_id=message_id, parse_mode="Markdown", reply_markup=get_main_menu())
-            return
-        except Exception:
-            pass
-    bot.send_message(chat_id, WELCOME_TEXT, parse_mode="Markdown", reply_markup=get_main_menu())
-
-            return
-        except Exception:
-            pass
-    bot.send_message(chat_id, WELCOME_TEXT, parse_mode="Markdown", reply_markup=get_main_menu())
-
-
 def build_wallet_text(user, sub):
     dep  = fmt(user["deposit_balance"])
     lock = fmt(user["locked_profits"])
     inv  = fmt(user["active_plan_price"])
+    
+    # القاعدة: 15 يوم لباقة الـ 10 آلاف، و30 يوم للبقية
     if sub and sub.get('plan_price') == 10000:
         p_days = 15
     else:
         p_days = 30
+        
     ud = days_until_unlock(user["profit_lock_start"], plan_days=p_days)
+    
     lock_note = f" *(تفتح بعد {ud} يوم)*" if ud > 0 else ""
     plan_name = sub["plan_name"] if sub else "لا توجد باقة نشطة"
     expiry    = sub["expiry_date"] if sub else "-"
+    
     warning_msg = ""
     if user['deposit_balance'] == 0:
-        warning_msg = f"⚠️ رصيدك صفر. انتظر {p_days} يوم لتفتح الأرباح.\n\n"
+        warning_msg = f"⚠️ رصيدك للسحب صفر حالياً.\nاستلم أرباحك يومياً وانتظر {p_days} يوم لتفتح.\n\n"
+
     return (
         f"{warning_msg}💳 *محفظتك الرقمية*\n"
         "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-        f"💵 رصيد: *{dep}* د.ع\n"
-        f"🔒 مقفلة: *{lock}* د.ع {lock_note}\n"
-        f"📦 الخطة: *{inv}* د.ع\n"
+        f"💵 رصيد قابل للسحب:  *{dep}* د.ع\n"
+        f"🔒 أرباح مقفلة:       *{lock}* د.ع {lock_note}\n"
+        f"📦 مبلغ الخطة النشطة: *{inv}* د.ع\n"
         "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-        f"📊 الباقة: *{plan_name}*\n"
-        f"🗓️ الانتهاء: *{expiry}*\n"
-        f"🆔 المعرف: `{user['user_id']}`"
+        f"📊 الباقة النشطة: *{plan_name}*\n"
+        f"🗓️ تاريخ الانتهاء: *{expiry}*\n"
+        f"🆔 معرف الحساب:  `{user['user_id']}`"
     )
-
-
-
-
-
 def _update_admin_msg(call, note: str):
     try:
         bot.edit_message_reply_markup(call.message.chat.id,
