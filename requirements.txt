@@ -1,3 +1,5 @@
 pyTelegramBotAPI
 pytz
 apscheduler
+requests
+beautifulsoup4
