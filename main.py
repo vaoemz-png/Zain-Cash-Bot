@@ -407,24 +407,38 @@ def send_main_menu(chat_id, message_id=None):
 
 
 def build_wallet_text(user, sub):
-    dep   = fmt(user["deposit_balance"])
-    lock  = fmt(user["locked_profits"])
-    inv   = fmt(user["active_plan_price"])
-    ud    = days_until_unlock(user["profit_lock_start"])
-    lock_note = f" *(تُفتح بعد {ud} يوم)*" if ud > 0 else ""
+    dep  = fmt(user["deposit_balance"])
+    lock = fmt(user["locked_profits"])
+    inv  = fmt(user["active_plan_price"])
+        # القاعدة: باقة الـ 10 آلاف تأخذ 15 يوم، وأي باقة أخرى تأخذ 30 يوم
+    if sub and sub.get('plan_price') == 10000:
+        p_days = 15
+    else:
+        p_days = 30
+    
+    ud = days_until_unlock(user["profit_lock_start"], plan_days=p_days)
+
+    
+    lock_note = f" *(تفتح بعد {ud} يوم)*" if ud > 0 else ""
     plan_name = sub["plan_name"] if sub else "لا توجد باقة نشطة"
-    expiry    = sub["expiry_date"] if sub else "—"
+    expiry    = sub["expiry_date"] if sub else "-"
+    
+    warning_msg = ""
+    if user['deposit_balance'] == 0:
+        warning_msg = f"⚠️ رصيدك القابل للسحب صفر\nلا يوجد رصيد متاح للسحب حالياً. استلم أرباحك يومياً وانتظر {p_days} يوم لتفتح وتتحول للرصيد.\n\n"
+
     return (
-        "💳 *محفظتك الرقمية*\n"
-        "━━━━━━━━━━━━━━━━━\n"
-        f"💸 رصيد قابل للسحب:  *{dep} د.ع*\n"
-        f"🔒 أرباح مقفلة:       *{lock} د.ع*{lock_note}\n"
-        f"📦 مبلغ الخطة النشطة: *{inv} د.ع*\n"
-        "━━━━━━━━━━━━━━━━━\n"
+        f"{warning_msg}💳 *محفظتك الرقمية*\n"
+        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+        f"💵 رصيد قابل للسحب:  *{dep}* د.ع\n"
+        f"🔒 أرباح مقفلة:       *{lock}* د.ع {lock_note}\n"
+        f"📦 مبلغ الخطة النشطة: *{inv}* د.ع\n"
+        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
         f"📊 الباقة النشطة: *{plan_name}*\n"
-        f"🗓 تاريخ الانتهاء: *{expiry}*\n"
-        f"🆔 معرف الحساب: `{user['user_id']}`"
+        f"🗓️ تاريخ الانتهاء: *{expiry}*\n"
+        f"🆔 معرف الحساب:  `{user['user_id']}`"
     )
+
 
 
 def _update_admin_msg(call, note: str):
